@@ -10,25 +10,30 @@ import {
 } from 'react'
 
 const COLORS = [
-  '#2C2420', // charcoal (default)
-  '#FFFFFF', // white
-  '#9C7B5E', // clay
-  '#8A9E82', // sage
-  '#A93226', // urgent/red
-  '#5C7054', // moss
-  '#C4B49A', // bark
+  // Darks / neutrals
+  '#2C2420', // charcoal
   '#6B5240', // earth
-  '#D4C4A8', // sand
+  '#9C7B5E', // clay
+  '#C4B49A', // bark
+  '#FFFFFF', // white
+  // Pastels
+  '#F2C4C4', // pastel pink
+  '#F2D9C4', // pastel peach
+  '#F2EAC4', // pastel yellow
+  '#D4EAC8', // pastel green
+  '#C4D9F2', // pastel blue
+  '#D4C4F2', // pastel lavender
+  '#F2C4E8', // pastel rose
+  // Mids
+  '#8A9E82', // sage
+  '#5C7054', // moss
   '#4A6FA5', // blue
-  '#E8C547', // yellow
+  '#7B5EA7', // purple
+  '#C0392B', // red
+  '#E67E22', // orange
+  '#27AE60', // green
+  '#2980B9', // bright blue
 ]
-
-interface Stroke {
-  tool: 'pen' | 'eraser'
-  color: string
-  size: number
-  points: { x: number; y: number }[]
-}
 
 export interface DrawingCanvasHandle {
   submit: () => string
@@ -53,20 +58,70 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const [submitted, setSubmitted] = useState(false)
     const [showPromptOverlay, setShowPromptOverlay] = useState(true)
     const [promptFading, setPromptFading] = useState(false)
+    const [canvasReady, setCanvasReady] = useState(false)
 
-    // Canvas transform state
-    const transformRef = useRef({ scale: 1, tx: 0, ty: 0 })
     const isDrawingRef = useRef(false)
     const lastPointRef = useRef<{ x: number; y: number } | null>(null)
-    const currentStrokeRef = useRef<{ x: number; y: number }[]>([])
-    const pinchRef = useRef<{ dist: number; midX: number; midY: number } | null>(null)
+    const pinchRef = useRef<{ dist: number; scale: number; tx: number; ty: number; midX: number; midY: number } | null>(null)
+    const transformRef = useRef({ scale: 1, tx: 0, ty: 0 })
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    // Keep latest tool/color/size accessible inside event handlers without re-binding
+    const toolRef = useRef(tool)
+    const colorRef = useRef(color)
+    const brushSizeRef = useRef(brushSize)
+    const submittedRef = useRef(submitted)
+    useEffect(() => { toolRef.current = tool }, [tool])
+    useEffect(() => { colorRef.current = color }, [color])
+    useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
+    useEffect(() => { submittedRef.current = submitted }, [submitted])
 
-    // Prompt overlay: show 2.8s then fade
+    // Prompt overlay
     useEffect(() => {
-      const fadeTimer = setTimeout(() => setPromptFading(true), 2200)
-      const hideTimer = setTimeout(() => setShowPromptOverlay(false), 2800)
-      return () => { clearTimeout(fadeTimer); clearTimeout(hideTimer) }
+      const t1 = setTimeout(() => setPromptFading(true), 2200)
+      const t2 = setTimeout(() => setShowPromptOverlay(false), 2800)
+      return () => { clearTimeout(t1); clearTimeout(t2) }
+    }, [])
+
+    // Size canvas to container — this is the critical fix for correct coordinate mapping
+    useEffect(() => {
+      const container = containerRef.current
+      const canvas = canvasRef.current
+      if (!container || !canvas) return
+
+      const resize = () => {
+        const dpr = window.devicePixelRatio || 1
+        const w = container.clientWidth
+        const h = container.clientHeight
+        if (!w || !h) return
+
+        // Save existing drawing before resize
+        const ctx = canvas.getContext('2d')!
+        let saved: ImageData | null = null
+        if (canvas.width && canvas.height) {
+          try { saved = ctx.getImageData(0, 0, canvas.width, canvas.height) } catch { /* ignore */ }
+        }
+
+        canvas.width = Math.round(w * dpr)
+        canvas.height = Math.round(h * dpr)
+        canvas.style.width = w + 'px'
+        canvas.style.height = h + 'px'
+
+        ctx.scale(dpr, dpr)
+        ctx.fillStyle = '#FFFFFF'
+        ctx.fillRect(0, 0, w, h)
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+
+        if (saved) {
+          ctx.putImageData(saved, 0, 0)
+        }
+        setCanvasReady(true)
+      }
+
+      resize()
+      const ro = new ResizeObserver(resize)
+      ro.observe(container)
+      return () => ro.disconnect()
     }, [])
 
     // Countdown timer
@@ -86,83 +141,60 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [submitted])
 
-    // Initialize canvas
-    useEffect(() => {
-      const canvas = canvasRef.current
-      if (!canvas) return
-      const ctx = canvas.getContext('2d')!
-      ctx.fillStyle = '#FFFFFF'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-    }, [])
-
-    function getCanvasContext() {
-      const canvas = canvasRef.current
-      if (!canvas) return null
-      return canvas.getContext('2d')
-    }
-
-    function saveUndo() {
-      const ctx = getCanvasContext()
-      const canvas = canvasRef.current
-      if (!ctx || !canvas) return
-      setUndoStack(prev => [...prev.slice(-19), ctx.getImageData(0, 0, canvas.width, canvas.height)])
-    }
-
+    // Convert screen coords → canvas CSS-pixel coords (accounts for dpr scaling)
     function screenToCanvas(screenX: number, screenY: number) {
       const canvas = canvasRef.current
       if (!canvas) return { x: 0, y: 0 }
       const rect = canvas.getBoundingClientRect()
+      // canvas.style.width === rect.width so this ratio is 1 (no extra scaling needed)
+      // The ctx.scale(dpr,dpr) call means we draw in CSS pixels naturally
       const { scale, tx, ty } = transformRef.current
-      const relX = screenX - rect.left - tx
-      const relY = screenY - rect.top - ty
-      return { x: relX / scale, y: relY / scale }
+      return {
+        x: ((screenX - rect.left) - tx) / scale,
+        y: ((screenY - rect.top) - ty) / scale,
+      }
     }
 
-    function applyTransform() {
+    function getCtx() {
+      return canvasRef.current?.getContext('2d') ?? null
+    }
+
+    function saveUndo() {
       const canvas = canvasRef.current
-      if (!canvas) return
-      const { scale, tx, ty } = transformRef.current
-      canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`
-      canvas.style.transformOrigin = '0 0'
+      const ctx = getCtx()
+      if (!ctx || !canvas) return
+      try {
+        const snap = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        setUndoStack(prev => [...prev.slice(-29), snap])
+      } catch { /* ignore cross-origin */ }
+    }
+
+    function drawSegment(x1: number, y1: number, x2: number, y2: number) {
+      const ctx = getCtx()
+      if (!ctx) return
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.strokeStyle = toolRef.current === 'eraser' ? '#FFFFFF' : colorRef.current
+      ctx.lineWidth = toolRef.current === 'eraser' ? brushSizeRef.current * 4 : brushSizeRef.current
+      ctx.stroke()
     }
 
     function startDraw(screenX: number, screenY: number) {
-      if (submitted) return
+      if (submittedRef.current) return
       saveUndo()
       isDrawingRef.current = true
-      currentStrokeRef.current = []
-      const pt = screenToCanvas(screenX, screenY)
-      lastPointRef.current = pt
-      currentStrokeRef.current.push(pt)
-
-      const ctx = getCanvasContext()
-      if (!ctx) return
-      ctx.beginPath()
-      ctx.moveTo(pt.x, pt.y)
-      ctx.lineCap = 'round'
-      ctx.lineJoin = 'round'
-      ctx.strokeStyle = tool === 'eraser' ? '#FFFFFF' : color
-      ctx.lineWidth = tool === 'eraser' ? brushSize * 3 : brushSize
+      lastPointRef.current = screenToCanvas(screenX, screenY)
     }
 
     function continueDraw(screenX: number, screenY: number) {
-      if (!isDrawingRef.current || submitted) return
-      const ctx = getCanvasContext()
-      if (!ctx) return
+      if (!isDrawingRef.current || submittedRef.current) return
       const pt = screenToCanvas(screenX, screenY)
-      const last = lastPointRef.current!
-
-      ctx.beginPath()
-      ctx.moveTo(last.x, last.y)
-      ctx.lineTo(pt.x, pt.y)
-      ctx.lineCap = 'round'
-      ctx.lineJoin = 'round'
-      ctx.strokeStyle = tool === 'eraser' ? '#FFFFFF' : color
-      ctx.lineWidth = tool === 'eraser' ? brushSize * 3 : brushSize
-      ctx.stroke()
-
+      const last = lastPointRef.current
+      if (last) drawSegment(last.x, last.y, pt.x, pt.y)
       lastPointRef.current = pt
-      currentStrokeRef.current.push(pt)
     }
 
     function endDraw() {
@@ -170,118 +202,93 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       lastPointRef.current = null
     }
 
-    // Mouse handlers
+    // Mouse
     const onMouseDown = useCallback((e: React.MouseEvent) => {
       if (e.button !== 0) return
       startDraw(e.clientX, e.clientY)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tool, color, brushSize, submitted])
+    }, [])
 
     const onMouseMove = useCallback((e: React.MouseEvent) => {
       continueDraw(e.clientX, e.clientY)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tool, color, brushSize, submitted])
+    }, [])
 
     const onMouseUp = useCallback(() => endDraw(), [])
 
-    // Touch handlers
-    function getTouchDist(t1: React.Touch, t2: React.Touch) {
-      const dx = t2.clientX - t1.clientX
-      const dy = t2.clientY - t1.clientY
-      return Math.sqrt(dx * dx + dy * dy)
-    }
-
-    function getTouchMid(t1: React.Touch, t2: React.Touch) {
-      return {
-        midX: (t1.clientX + t2.clientX) / 2,
-        midY: (t1.clientY + t2.clientY) / 2,
-      }
-    }
-
+    // Touch
     const onTouchStart = useCallback((e: React.TouchEvent) => {
       e.preventDefault()
       if (e.touches.length === 1) {
-        const t = e.touches[0]
-        startDraw(t.clientX, t.clientY)
+        pinchRef.current = null
+        startDraw(e.touches[0].clientX, e.touches[0].clientY)
       } else if (e.touches.length === 2) {
         endDraw()
-        const t1 = e.touches[0]
-        const t2 = e.touches[1]
-        pinchRef.current = {
-          dist: getTouchDist(t1, t2),
-          ...getTouchMid(t1, t2),
-        }
+        const t0 = e.touches[0], t1 = e.touches[1]
+        const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY)
+        const tf = transformRef.current
+        pinchRef.current = { dist, scale: tf.scale, tx: tf.tx, ty: tf.ty, midX: (t0.clientX + t1.clientX) / 2, midY: (t0.clientY + t1.clientY) / 2 }
       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tool, color, brushSize, submitted])
+    }, [])
 
     const onTouchMove = useCallback((e: React.TouchEvent) => {
       e.preventDefault()
       if (e.touches.length === 1 && !pinchRef.current) {
-        const t = e.touches[0]
-        continueDraw(t.clientX, t.clientY)
+        continueDraw(e.touches[0].clientX, e.touches[0].clientY)
       } else if (e.touches.length === 2 && pinchRef.current) {
-        const t1 = e.touches[0]
-        const t2 = e.touches[1]
-        const newDist = getTouchDist(t1, t2)
-        const { midX, midY } = getTouchMid(t1, t2)
-        const scaleChange = newDist / pinchRef.current.dist
-        const tf = transformRef.current
-        const newScale = Math.min(Math.max(tf.scale * scaleChange, 0.5), 4)
-
-        // Zoom towards pinch midpoint
+        const t0 = e.touches[0], t1 = e.touches[1]
+        const newDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY)
+        const midX = (t0.clientX + t1.clientX) / 2
+        const midY = (t0.clientY + t1.clientY) / 2
+        const p = pinchRef.current
+        const newScale = Math.min(Math.max(p.scale * (newDist / p.dist), 1), 5)
         const canvas = canvasRef.current
         if (canvas) {
           const rect = canvas.getBoundingClientRect()
-          const canvasMidX = midX - rect.left
-          const canvasMidY = midY - rect.top
-          tf.tx = canvasMidX - (canvasMidX - tf.tx) * (newScale / tf.scale)
-          tf.ty = canvasMidY - (canvasMidY - tf.ty) * (newScale / tf.scale)
-          tf.scale = newScale
-          applyTransform()
+          const anchorX = (p.midX - rect.left - p.tx) / p.scale
+          const anchorY = (p.midY - rect.top - p.ty) / p.scale
+          const newTx = midX - rect.left - anchorX * newScale
+          const newTy = midY - rect.top - anchorY * newScale
+          transformRef.current = { scale: newScale, tx: newTx, ty: newTy }
+          canvas.style.transformOrigin = '0 0'
+          canvas.style.transform = `translate(${newTx}px, ${newTy}px) scale(${newScale})`
         }
-
-        pinchRef.current = { dist: newDist, midX, midY }
       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tool, color, brushSize, submitted])
+    }, [])
 
     const onTouchEnd = useCallback((e: React.TouchEvent) => {
       e.preventDefault()
-      if (e.touches.length < 2) {
-        pinchRef.current = null
-      }
-      if (e.touches.length === 0) {
-        endDraw()
-      }
+      if (e.touches.length < 2) pinchRef.current = null
+      if (e.touches.length === 0) endDraw()
     }, [])
 
     function handleUndo() {
       if (undoStack.length === 0) return
-      const ctx = getCanvasContext()
+      const ctx = getCtx()
       const canvas = canvasRef.current
       if (!ctx || !canvas) return
-      const last = undoStack[undoStack.length - 1]
-      ctx.putImageData(last, 0, 0)
+      const snap = undoStack[undoStack.length - 1]
+      ctx.putImageData(snap, 0, 0)
       setUndoStack(prev => prev.slice(0, -1))
     }
 
     function handleSubmit() {
-      if (submitted) return
+      if (submittedRef.current) return
       setSubmitted(true)
+      submittedRef.current = true
       if (timerRef.current) clearInterval(timerRef.current)
       const canvas = canvasRef.current
       if (!canvas) return
-      const dataUrl = canvas.toDataURL('image/png')
-      onSubmit(dataUrl)
+      // Reset transform before export so the full canvas is captured
+      canvas.style.transform = ''
+      transformRef.current = { scale: 1, tx: 0, ty: 0 }
+      onSubmit(canvas.toDataURL('image/png'))
     }
 
     useImperativeHandle(ref, () => ({
-      submit: () => {
-        const canvas = canvasRef.current
-        if (!canvas) return ''
-        return canvas.toDataURL('image/png')
-      }
+      submit: () => canvasRef.current?.toDataURL('image/png') ?? ''
     }))
 
     const radius = 20
@@ -294,69 +301,50 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const timeDisplay = `${mins}:${secs.toString().padStart(2, '0')}`
 
     return (
-      <div className="canvas-screen" ref={containerRef}>
+      <div className="canvas-screen" ref={containerRef} style={{ userSelect: 'none' }}>
         {/* Prompt overlay */}
         {showPromptOverlay && (
           <div className={`prompt-overlay${promptFading ? ' fading' : ''}`}>
-            <p style={{ color: 'var(--bark)', fontSize: '12px', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: '16px' }}>
+            <p style={{ color: 'var(--bark)', fontSize: '11px', letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: '14px' }}>
               Your prompt
             </p>
             <h2 style={{
               fontFamily: 'var(--font-cormorant, "Cormorant Garamond", serif)',
-              fontSize: '32px',
-              fontWeight: 300,
-              color: 'var(--cream)',
-              textAlign: 'center',
-              lineHeight: 1.3,
-              maxWidth: '340px',
+              fontSize: '30px', fontWeight: 300, color: 'var(--cream)',
+              textAlign: 'center', lineHeight: 1.3, maxWidth: '320px',
             }}>
               {prompt}
             </h2>
+            <p style={{ color: 'var(--bark)', fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: '20px', opacity: 0.7 }}>
+              tap to dismiss
+            </p>
           </div>
         )}
 
         {/* HUD */}
         <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 16px',
-          paddingTop: 'calc(8px + var(--safe-top))',
-          background: 'var(--warm-white)',
-          borderBottom: '1px solid var(--sand)',
-          flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 16px', background: 'var(--warm-white)',
+          borderBottom: '1px solid var(--sand)', flexShrink: 0,
         }}>
-          <span style={{
-            fontFamily: 'var(--font-cormorant, "Cormorant Garamond", serif)',
-            fontSize: '20px',
-            fontWeight: 300,
-            color: 'var(--charcoal)',
-          }}>
+          <span style={{ fontFamily: 'var(--font-cormorant, "Cormorant Garamond", serif)', fontSize: '18px', fontWeight: 300, color: 'var(--charcoal)' }}>
             SketchClub
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{
               fontFamily: 'var(--font-cormorant, "Cormorant Garamond", serif)',
-              fontSize: '26px',
-              fontWeight: 500,
+              fontSize: '24px', fontWeight: 500,
               color: isUrgent ? 'var(--urgent)' : 'var(--charcoal)',
-              transition: 'color 0.3s',
-              minWidth: '48px',
-              textAlign: 'right',
+              transition: 'color 0.3s', minWidth: '44px', textAlign: 'right',
             }}>
               {timeDisplay}
             </span>
-            <svg width="44" height="44" viewBox="0 0 48 48">
+            <svg width="44" height="44" viewBox="0 0 48 48" style={{ transform: 'rotate(-90deg)' }}>
               <circle cx="24" cy="24" r={radius} fill="none" stroke="var(--sand)" strokeWidth="3" />
-              <circle
-                className="timer-arc-ring"
-                cx="24" cy="24" r={radius}
-                fill="none"
+              <circle cx="24" cy="24" r={radius} fill="none"
                 stroke={isUrgent ? 'var(--urgent)' : 'var(--clay)'}
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeDasharray={circumference}
-                strokeDashoffset={dashOffset}
+                strokeWidth="3" strokeLinecap="round"
+                strokeDasharray={circumference} strokeDashoffset={dashOffset}
                 style={{ transition: 'stroke-dashoffset 1s linear, stroke 0.3s' }}
               />
             </svg>
@@ -365,38 +353,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
 
         {/* Prompt strip */}
         <div style={{
-          background: 'var(--parchment)',
-          borderBottom: '1px solid var(--sand)',
-          padding: '8px 16px',
-          flexShrink: 0,
-          textAlign: 'center',
+          background: 'var(--parchment)', borderBottom: '1px solid var(--sand)',
+          padding: '6px 16px', flexShrink: 0, textAlign: 'center',
         }}>
-          <p style={{ fontSize: '13px', color: 'var(--earth)', fontStyle: 'italic' }}>
-            {prompt}
-          </p>
+          <p style={{ fontSize: '13px', color: 'var(--earth)', fontStyle: 'italic' }}>{prompt}</p>
         </div>
 
-        {/* Canvas area */}
-        <div style={{
-          flex: 1,
-          overflow: 'hidden',
-          position: 'relative',
-          background: 'var(--parchment)',
-          touchAction: 'none',
-        }}>
+        {/* Canvas container — flex:1 fills all remaining space */}
+        <div style={{ flex: 1, overflow: 'hidden', position: 'relative', background: '#FFFFFF', touchAction: 'none', minHeight: 0 }}>
           <canvas
             ref={canvasRef}
-            width={1200}
-            height={1200}
             style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: '100%',
+              position: 'absolute', top: 0, left: 0,
               cursor: tool === 'eraser' ? 'cell' : 'crosshair',
-              background: '#FFFFFF',
               touchAction: 'none',
+              display: canvasReady ? 'block' : 'none',
             }}
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
@@ -409,99 +380,63 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
         </div>
 
         {/* Toolbar */}
-        <div className="toolbar" style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+        <div className="toolbar">
           {/* Pen */}
-          <button
-            className={`tool-btn${tool === 'pen' ? ' active' : ''}`}
-            onClick={() => setTool('pen')}
-            title="Pen"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19l7-7 3 3-7 7-3-3z" />
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-              <path d="M2 2l7.586 7.586" />
-              <circle cx="11" cy="11" r="2" />
+          <button className={`tool-btn${tool === 'pen' ? ' active' : ''}`} onClick={() => setTool('pen')} title="Pen">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
             </svg>
           </button>
 
           {/* Eraser */}
-          <button
-            className={`tool-btn${tool === 'eraser' ? ' active' : ''}`}
-            onClick={() => setTool('eraser')}
-            title="Eraser"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 20H7L3 16l10-10 7 7-4.5 4.5" />
-              <path d="M6.5 17.5l3-3" />
+          <button className={`tool-btn${tool === 'eraser' ? ' active' : ''}`} onClick={() => setTool('eraser')} title="Eraser">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 20H7L3 16l10-10 7 7-4.5 4.5"/><path d="M6.5 17.5l3-3"/>
             </svg>
           </button>
 
           {/* Undo */}
-          <button
-            className="tool-btn"
-            onClick={handleUndo}
-            disabled={undoStack.length === 0}
-            title="Undo"
-            style={{ opacity: undoStack.length === 0 ? 0.4 : 1 }}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="9 14 4 9 9 4" />
-              <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+          <button className="tool-btn" onClick={handleUndo} disabled={undoStack.length === 0}
+            title="Undo" style={{ opacity: undoStack.length === 0 ? 0.4 : 1 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
             </svg>
           </button>
 
-          {/* Brush size */}
-          <button
-            className={`tool-btn${showSizeSlider ? ' active' : ''}`}
-            onClick={() => setShowSizeSlider(s => !s)}
-            title="Brush size"
-          >
-            <div style={{
-              width: Math.min(brushSize * 2, 18),
-              height: Math.min(brushSize * 2, 18),
-              borderRadius: '50%',
-              background: 'var(--charcoal)',
-            }} />
+          {/* Brush size dot */}
+          <button className={`tool-btn${showSizeSlider ? ' active' : ''}`}
+            onClick={() => setShowSizeSlider(s => !s)} title="Brush size">
+            <div style={{ width: Math.min(brushSize * 2.5, 18), height: Math.min(brushSize * 2.5, 18), borderRadius: '50%', background: 'currentColor' }} />
           </button>
 
-          {/* Size slider (inline) */}
           {showSizeSlider && (
-            <input
-              type="range"
-              min={1}
-              max={20}
-              value={brushSize}
+            <input type="range" min={1} max={24} value={brushSize}
               onChange={e => setBrushSize(Number(e.target.value))}
-              style={{ width: '80px', cursor: 'pointer' }}
-            />
+              style={{ width: '72px', cursor: 'pointer', flexShrink: 0 }} />
           )}
 
-          {/* Divider */}
-          <div style={{ width: '1px', height: '28px', background: 'var(--sand)', flexShrink: 0, margin: '0 4px' }} />
+          <div style={{ width: '1px', height: '24px', background: 'var(--sand)', flexShrink: 0, margin: '0 2px' }} />
 
-          {/* Color swatches */}
+          {/* Colors */}
           {COLORS.map(c => (
-            <button
-              key={c}
+            <button key={c}
               className={`color-swatch${color === c && tool === 'pen' ? ' active' : ''}`}
-              style={{ background: c, border: c === '#FFFFFF' ? '2px solid var(--sand)' : '2px solid transparent' }}
+              style={{
+                background: c,
+                border: c === '#FFFFFF' ? '2px solid var(--sand)' : '2px solid transparent',
+                outline: color === c && tool === 'pen' ? '2px solid var(--charcoal)' : 'none',
+                outlineOffset: '2px',
+              }}
               onClick={() => { setColor(c); setTool('pen') }}
-              title={c}
             />
           ))}
 
-          {/* Spacer */}
-          <div style={{ flex: 1 }} />
-
-          {/* Submit button */}
-          <button
-            className="btn-primary"
-            onClick={handleSubmit}
-            disabled={submitted}
-            style={{ width: 'auto', padding: '8px 16px', fontSize: '13px', flexShrink: 0 }}
-          >
-            {submitted ? 'Submitted' : 'Submit'}
-          </button>
+          <div style={{ flexShrink: 0, marginLeft: 'auto', paddingLeft: '8px' }}>
+            <button className="btn-primary" onClick={handleSubmit} disabled={submitted}
+              style={{ width: 'auto', padding: '6px 14px', fontSize: '12px', whiteSpace: 'nowrap' }}>
+              {submitted ? 'Submitted' : 'Submit'}
+            </button>
+          </div>
         </div>
       </div>
     )
