@@ -70,20 +70,17 @@ export default function ResultsPage() {
   }
 
   async function handleShare() {
+    const inviteUrl = `${window.location.origin}/join/${code}`
     const shareData = {
-      title: 'SketchClub Results',
-      text: `We just played SketchClub! "${game?.prompt}" — check out the results!`,
-      url: window.location.href,
+      title: 'SketchClub',
+      text: `We just played SketchClub! "${game?.prompt}" — join the next round:`,
+      url: inviteUrl,
     }
     if (navigator.share) {
-      try {
-        await navigator.share(shareData)
-      } catch {
-        // User cancelled
-      }
+      try { await navigator.share(shareData) } catch { /* cancelled */ }
     } else {
-      await navigator.clipboard.writeText(window.location.href)
-      showToast('Results link copied to clipboard!')
+      await navigator.clipboard.writeText(inviteUrl)
+      showToast('Invite link copied to clipboard!')
     }
   }
 

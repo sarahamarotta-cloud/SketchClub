@@ -101,10 +101,7 @@ export default function DrawPage() {
 
     const { error } = await supabase
       .from('players')
-      .update({
-        drawing_url: dataUrl,
-        submitted_at: new Date().toISOString(),
-      })
+      .update({ drawing_url: dataUrl, submitted_at: new Date().toISOString() })
       .eq('id', myPlayer.id)
 
     if (error) {
@@ -113,8 +110,35 @@ export default function DrawPage() {
       return
     }
 
+    // In demo mode, auto-submit fake drawings for bot players
+    if (localStorage.getItem('demoMode') === 'true') {
+      const bots = players.filter(p => p.name.endsWith('(Bot)') && !p.drawing_url)
+      for (const bot of bots) {
+        const fakeUrl = makeFakeDrawing(['#C4B49A', '#8A9E82', '#9C7B5E'][Math.floor(Math.random() * 3)])
+        await supabase
+          .from('players')
+          .update({ drawing_url: fakeUrl, submitted_at: new Date().toISOString() })
+          .eq('id', bot.id)
+      }
+    }
+
     showToast('Drawing submitted!')
     router.push(`/waiting/${code}`)
+  }
+
+  function makeFakeDrawing(color: string): string {
+    const c = document.createElement('canvas')
+    c.width = 300; c.height = 225
+    const cx = c.getContext('2d')!
+    cx.fillStyle = '#FAF7F2'; cx.fillRect(0, 0, 300, 225)
+    cx.fillStyle = color; cx.globalAlpha = 0.15; cx.fillRect(20, 20, 260, 185); cx.globalAlpha = 1
+    cx.strokeStyle = color; cx.lineWidth = 2; cx.lineCap = 'round'
+    cx.beginPath(); cx.moveTo(40, 112)
+    for (let i = 0; i < 8; i++) cx.lineTo(40 + i * 32, 112 + (i % 2 ? 1 : -1) * 28)
+    cx.stroke()
+    cx.lineWidth = 1.5; cx.strokeRect(116, 58, 68, 84)
+    cx.beginPath(); cx.arc(150, 46, 14, 0, Math.PI * 2); cx.stroke()
+    return c.toDataURL()
   }
 
   if (!game) {

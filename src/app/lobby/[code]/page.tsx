@@ -1,16 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useEffect, useState, Suspense } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import { Game, Player } from '@/lib/types'
 import { PlayerList } from '@/components/PlayerList'
 import { useToast } from '@/components/Toast'
 
-export default function LobbyPage() {
+function LobbyContent() {
   const params = useParams()
   const code = params.code as string
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const isDemo = searchParams.get('demo') === 'true'
   const { showToast } = useToast()
 
   const [game, setGame] = useState<Game | null>(null)
@@ -115,6 +117,12 @@ export default function LobbyPage() {
     showToast('Game code copied!')
   }
 
+  async function copyInviteLink() {
+    const url = `${window.location.origin}/join/${code}`
+    await navigator.clipboard.writeText(url)
+    showToast('Invite link copied!')
+  }
+
   if (loading) {
     return (
       <div className="screen" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -149,16 +157,9 @@ export default function LobbyPage() {
             onClick={copyCode}
             style={{
               fontFamily: 'var(--font-cormorant, "Cormorant Garamond", serif)',
-              fontSize: '48px',
-              fontWeight: 600,
-              letterSpacing: '0.12em',
-              color: 'var(--charcoal)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '4px 12px',
-              borderRadius: '6px',
-              transition: 'background 0.2s',
+              fontSize: '48px', fontWeight: 600, letterSpacing: '0.12em',
+              color: 'var(--charcoal)', background: 'none', border: 'none',
+              cursor: 'pointer', padding: '4px 12px', borderRadius: '6px', transition: 'background 0.2s',
             }}
             onMouseOver={e => (e.currentTarget.style.background = 'var(--parchment)')}
             onMouseOut={e => (e.currentTarget.style.background = 'none')}
@@ -166,7 +167,29 @@ export default function LobbyPage() {
             {code}
           </button>
           <p style={{ fontSize: '12px', color: 'var(--bark)', marginTop: '4px' }}>Tap to copy</p>
+          <button
+            onClick={copyInviteLink}
+            style={{
+              marginTop: '10px', background: 'transparent', border: '1px solid var(--sand)',
+              color: 'var(--earth)', borderRadius: '4px', padding: '7px 16px',
+              fontSize: '12px', cursor: 'pointer', letterSpacing: '0.06em',
+              fontFamily: 'inherit', transition: 'all 0.2s',
+            }}
+          >
+            Copy invite link
+          </button>
         </div>
+
+        {isDemo && (
+          <div style={{
+            background: 'var(--parchment)', border: '1px dashed var(--bark)',
+            borderRadius: '4px', padding: '12px 16px', marginBottom: '20px',
+            fontSize: '13px', color: 'var(--earth)', lineHeight: 1.5,
+          }}>
+            <strong style={{ color: 'var(--clay)' }}>Demo mode</strong> — two bot players are in the lobby.
+            Start whenever you&apos;re ready; bots will auto-submit drawings.
+          </div>
+        )}
 
         {/* Prompt preview */}
         {game && (
@@ -225,5 +248,13 @@ export default function LobbyPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function LobbyPage() {
+  return (
+    <Suspense fallback={<div className="screen" style={{ alignItems: 'center', justifyContent: 'center' }}><div className="spinner" /></div>}>
+      <LobbyContent />
+    </Suspense>
   )
 }
