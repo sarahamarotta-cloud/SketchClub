@@ -37,6 +37,6 @@ create policy "players_select" on players for select using (true);
 create policy "players_insert" on players for insert with check (true);
 create policy "players_update" on players for update using (true);
 
--- Enable realtime
-alter publication supabase_realtime add table games;
-alter publication supabase_realtime add table players;
+-- Grant table access to anon and authenticated roles
+grant select, insert, update on games to anon, authenticated;
+grant select, insert, update on players to anon, authenticated;
