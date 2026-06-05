@@ -40,9 +40,14 @@ function LandingContent() {
       await supabase.from('players').insert({ game_id: game.id, name: name.trim(), is_host: true })
       localStorage.setItem('playerName', name.trim())
       router.push(`/lobby/${code}`)
-    } catch (err) {
-      console.error(err)
-      showToast('Failed to create game. Please try again.', 'error')
+    } catch (err: unknown) {
+      console.error('Create error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('relation') || msg.includes('does not exist')) {
+        showToast('Database not set up — run supabase/schema.sql first.', 'error')
+      } else {
+        showToast(`Error: ${msg.slice(0, 80)}`, 'error')
+      }
       setLoading(false)
     }
   }
@@ -92,9 +97,16 @@ function LandingContent() {
       localStorage.setItem('playerName', demoName)
       localStorage.setItem('demoMode', 'true')
       router.push(`/lobby/${code}?demo=true`)
-    } catch (err) {
-      console.error(err)
-      showToast('Failed to start demo. Please try again.', 'error')
+    } catch (err: unknown) {
+      console.error('Demo error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('relation') || msg.includes('does not exist') || msg.includes('42P01')) {
+        showToast('Database not set up yet — run supabase/schema.sql first.', 'error')
+      } else if (msg.includes('Invalid API key') || msg.includes('apikey') || msg.includes('401')) {
+        showToast('Supabase key missing — check Vercel env vars.', 'error')
+      } else {
+        showToast(`Error: ${msg.slice(0, 80)}`, 'error')
+      }
       setLoading(false)
     }
   }
