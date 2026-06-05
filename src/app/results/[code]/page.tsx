@@ -101,8 +101,8 @@ export default function ResultsPage() {
   const rankSymbols = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII']
 
   return (
-    <div className="screen-scroll">
-      <div style={{ padding: '32px 20px', maxWidth: '600px', margin: '0 auto', width: '100%' }}>
+    <div style={{ minHeight: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch' as const, background: 'var(--cream)' }}>
+      <div style={{ padding: '32px 20px 48px', maxWidth: '600px', margin: '0 auto', width: '100%' }}>
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <p style={{ fontSize: '12px', color: 'var(--bark)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '8px' }}>

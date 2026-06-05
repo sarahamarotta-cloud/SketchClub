@@ -136,8 +136,8 @@ export default function WaitingPage() {
   const allDone = total > 0 && submitted.length === total
 
   return (
-    <div className="screen-scroll">
-      <div style={{ padding: '32px 20px', maxWidth: '500px', margin: '0 auto', width: '100%' }}>
+    <div style={{ minHeight: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch' as const, background: 'var(--cream)' }}>
+      <div style={{ padding: '32px 20px 48px', maxWidth: '500px', margin: '0 auto', width: '100%' }}>
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <h1 style={{
