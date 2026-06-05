@@ -8,6 +8,18 @@ import { useToast } from '@/components/Toast'
 
 type Mode = 'home' | 'create' | 'join'
 
+function extractMsg(err: unknown): string {
+  if (!err) return 'Unknown error'
+  if (typeof err === 'string') return err
+  if (err instanceof Error) return err.message
+  // Supabase errors: { message, code, details, hint }
+  if (typeof err === 'object') {
+    const e = err as Record<string, unknown>
+    return String(e.message || e.error_description || e.code || JSON.stringify(err))
+  }
+  return String(err)
+}
+
 function LandingContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -42,7 +54,7 @@ function LandingContent() {
       router.push(`/lobby/${code}`)
     } catch (err: unknown) {
       console.error('Create error:', err)
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = extractMsg(err)
       if (msg.includes('relation') || msg.includes('does not exist')) {
         showToast('Database not set up — run supabase/schema.sql first.', 'error')
       } else {
@@ -99,7 +111,7 @@ function LandingContent() {
       router.push(`/lobby/${code}?demo=true`)
     } catch (err: unknown) {
       console.error('Demo error:', err)
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = extractMsg(err)
       if (msg.includes('relation') || msg.includes('does not exist') || msg.includes('42P01')) {
         showToast('Database not set up yet — run supabase/schema.sql first.', 'error')
       } else if (msg.includes('Invalid API key') || msg.includes('apikey') || msg.includes('401')) {
