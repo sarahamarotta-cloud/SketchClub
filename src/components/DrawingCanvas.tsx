@@ -48,7 +48,7 @@ interface DrawingCanvasProps {
 export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
   function DrawingCanvas({ onSubmit, totalSecs, prompt }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
-    const containerRef = useRef<HTMLDivElement>(null)
+    const canvasContainerRef = useRef<HTMLDivElement>(null)
     const [tool, setTool] = useState<'pen' | 'eraser'>('pen')
     const [color, setColor] = useState(COLORS[0])
     const [brushSize, setBrushSize] = useState(4)
@@ -58,7 +58,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const [submitted, setSubmitted] = useState(false)
     const [showPromptOverlay, setShowPromptOverlay] = useState(true)
     const [promptFading, setPromptFading] = useState(false)
-    const [canvasReady, setCanvasReady] = useState(false)
 
     const isDrawingRef = useRef(false)
     const lastPointRef = useRef<{ x: number; y: number } | null>(null)
@@ -82,46 +81,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       return () => { clearTimeout(t1); clearTimeout(t2) }
     }, [])
 
-    // Size canvas to container — this is the critical fix for correct coordinate mapping
+    // Size canvas to its direct container — critical for correct coordinate mapping
     useEffect(() => {
-      const container = containerRef.current
+      const container = canvasContainerRef.current
       const canvas = canvasRef.current
       if (!container || !canvas) return
 
-      const resize = () => {
+      function initCanvas(w: number, h: number) {
+        if (!canvas || !w || !h) return
         const dpr = window.devicePixelRatio || 1
-        const w = container.clientWidth
-        const h = container.clientHeight
-        if (!w || !h) return
-
-        // Save existing drawing before resize
-        const ctx = canvas.getContext('2d')!
-        let saved: ImageData | null = null
-        if (canvas.width && canvas.height) {
-          try { saved = ctx.getImageData(0, 0, canvas.width, canvas.height) } catch { /* ignore */ }
-        }
-
         canvas.width = Math.round(w * dpr)
         canvas.height = Math.round(h * dpr)
         canvas.style.width = w + 'px'
         canvas.style.height = h + 'px'
-
+        const ctx = canvas.getContext('2d')!
         ctx.scale(dpr, dpr)
         ctx.fillStyle = '#FFFFFF'
         ctx.fillRect(0, 0, w, h)
         ctx.lineCap = 'round'
         ctx.lineJoin = 'round'
-
-        if (saved) {
-          ctx.putImageData(saved, 0, 0)
-        }
-        setCanvasReady(true)
       }
 
-      resize()
-      const ro = new ResizeObserver(resize)
+      // Wait one frame for flex layout to settle before measuring
+      const raf = requestAnimationFrame(() => {
+        initCanvas(container.clientWidth, container.clientHeight)
+      })
+
+      const ro = new ResizeObserver(entries => {
+        const e = entries[0]
+        if (e) initCanvas(e.contentRect.width, e.contentRect.height)
+      })
       ro.observe(container)
-      return () => ro.disconnect()
+
+      return () => { cancelAnimationFrame(raf); ro.disconnect() }
     }, [])
 
     // Countdown timer
@@ -301,7 +293,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const timeDisplay = `${mins}:${secs.toString().padStart(2, '0')}`
 
     return (
-      <div className="canvas-screen" ref={containerRef} style={{ userSelect: 'none' }}>
+      <div className="canvas-screen" style={{ userSelect: 'none' }}>
         {/* Prompt overlay */}
         {showPromptOverlay && (
           <div className={`prompt-overlay${promptFading ? ' fading' : ''}`}>
@@ -359,15 +351,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
           <p style={{ fontSize: '13px', color: 'var(--earth)', fontStyle: 'italic' }}>{prompt}</p>
         </div>
 
-        {/* Canvas container — flex:1 fills all remaining space */}
-        <div style={{ flex: 1, overflow: 'hidden', position: 'relative', background: '#FFFFFF', touchAction: 'none', minHeight: 0 }}>
+        {/* Canvas container — ref here so we measure only the drawable area */}
+        <div ref={canvasContainerRef} style={{ flex: 1, overflow: 'hidden', position: 'relative', background: '#FFFFFF', touchAction: 'none', minHeight: 0 }}>
           <canvas
             ref={canvasRef}
             style={{
               position: 'absolute', top: 0, left: 0,
               cursor: tool === 'eraser' ? 'cell' : 'crosshair',
               touchAction: 'none',
-              display: canvasReady ? 'block' : 'none',
+              display: 'block',
             }}
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
